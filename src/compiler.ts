@@ -15,6 +15,27 @@ function outputErrorsToChannel(outputChannel: vscode.OutputChannel, errors: any)
     outputChannel.show();
 }
 
+function logPathForFile(filename: string) {
+    return path.resolve(path.dirname(filename), 'logs');
+}
+
+// Assumes logPath is an existing directory.
+function copyFileToLogDir(sourcePath: string, logPath: string, timestamp: Date) {
+    const logInputPath = path.resolve(logPath, timestamp.toISOString() + '-' + path.basename(sourcePath));
+    fs.copyFile(sourcePath, logInputPath, (err) => {
+        if (err) { console.log('failed to copy file: ' + err); throw err; }
+    });
+}
+
+
+// Assumes logPath is an existing directory.
+function copyOutputToLogDir(sourcePath: string, outputText: string, logPath: string, timestamp: Date) {
+    const logOutputPath = path.resolve(logPath, timestamp.toISOString() + '-' + path.basename(sourcePath) + '.out');
+    fs.writeFile(logOutputPath, outputText, (err) => {
+        if (err) { console.log('failed to copy output: ' + err); throw err; }
+    });
+}
+
 export function compile(contracts: any,
                         diagnosticCollection: vscode.DiagnosticCollection,
                         buildDir: string, rootDir: string, sourceDir: string, excludePath?: string, singleContractFilePath?: string): Promise<Array<string>> {
@@ -34,9 +55,31 @@ export function compile(contracts: any,
     const remoteCompiler = vscode.workspace.getConfiguration('solidity').get<string>('compileUsingRemoteVersion');
     const localCompiler = vscode.workspace.getConfiguration('solidity').get<string>('compileUsingLocalVersion');
     const enableNodeCompiler = vscode.workspace.getConfiguration('solidity').get<boolean>('enableLocalNodeCompiler'); 
+
     return new Promise((resolve, reject) => {
         solc.intialiseCompiler(localCompiler, remoteCompiler, enableNodeCompiler).then(() => {
+
             const output = solc.compile(JSON.stringify(contracts));
+            const timestamp = new Date();
+            for (const sourcePath of Object.keys(contracts.sources)) {
+                // Copy the source code for future analysis.
+                const logPath = logPathForFile(sourcePath);
+                fs.exists(logPath, (dirExists) => {
+                    if (dirExists) {
+                        copyFileToLogDir(sourcePath, logPath, timestamp);
+                        copyOutputToLogDir(sourcePath, output, logPath, timestamp);
+                    } else {
+                        fs.mkdir(logPath, err => {
+                            if (err) {
+                                console.log('Failed to make directory');
+                            } else {
+                                copyFileToLogDir(sourcePath, logPath, timestamp);
+                                copyOutputToLogDir(sourcePath, output, logPath, timestamp);
+                            }
+                        });
+                    }
+                });
+             }
 
             if (solc.currentCompilerType === compilerType.localFile) {
                 outputChannel.appendLine("Compiling using local file: '" + solc.currentCompilerSetting + "', solidity version: " + solc.getVersion() );
